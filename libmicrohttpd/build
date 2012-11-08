@@ -1,0 +1,5 @@
+NAME=libmicrohttpd
+VERSION=0.9.22
+URL="http://open-source-box.org/libmicrohttpd/$NAME-$VERSION.tar.gz"
+
+. ../build
