@@ -1,0 +1,5 @@
+NAME=c-ares
+VERSION=1.9.1
+URL="http://c-ares.haxx.se/download/$NAME-$VERSION.tar.gz"
+
+. ../build
