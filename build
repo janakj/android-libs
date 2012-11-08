@@ -1,0 +1,247 @@
+#!/usr/bin/env bash
+
+print_doc () {
+    echo \
+"Build an autotools-based library as native library for Android.
+
+SYNOPSIS
+  $(basename $0)
+
+OPTIONS
+  -h  Print this help text and exit.
+
+DESCRIPTION
+  Cross-compile a shared library with a configuration system based on
+  autotools for Android. The resulting library should be suitable for
+  inclusion into an Android application as a native library. The script needs
+  to have access to Android NDK.
+
+  The script first downloads the source tarball for the given library, unpacks
+  the sources into a temporary directory and then runs configure, make all,
+  and make install. Several environment variables are overriden before
+  configure is called to make sure that the configure script knows that we're
+  cross-compiling.
+
+  Because the linker on Android doesn't support versioned libraries created by
+  libtool by default, we need to modify the resulting binary and remove the
+  ABI version suffix from its SONAME. This is an ungly hack, but hopefully a
+  future version of Android NDK will handle pre-built shared libraries better.
+
+  To use the pre-build library, include the generated Android.mk in your
+  project's jni/Android.mk. For example (for libcurl):
+
+  ...
+  LOCAL_SHARED_LIBRARIES := curl
+  include \$(BUILD_SHARED_LIBRARY)
+  include \".../android-libs/curl/curl-7.28.0/Android.mk\"
+  ...
+
+  Note: If the JNI library in your Android project depends on a pre-build
+  shared library (like libcurl), you may need to load the pre-build shared
+  library explicitly with something like:
+
+  System.loadLibrary(\"curl\");
+
+  It appears that the Android linker cannot handle native library dependencies
+  correctly (at least on Android 4.2).
+
+RETURN VALUE
+  The script returns 0 on success and a non-zero value if it failed to build
+  the library.
+
+ENVIRONMENT VARIABLES
+  The script to build a library needs to define the following variables:
+
+  NAME          The name of the library being built
+  VERSION       Library version
+  TARBALL       Source tarball name (default is $NAME-$VERSION.tar.gz)
+  URL           The URL to download the source tarball from (optional)
+  TOOL_VERSION  The version of gcc and related tools (default is highest)
+  ARCH          Target Android architecture (default arm-linux-androideabi)
+  PLATFORM      Target Android platform (default is the highest API number)
+
+TODO
+  Currently the script assumes that it will be run with the directory of the
+  library under android-libs set as current. Fix that.
+
+  Fix relative paths to files in quilt patches.
+
+  Make sure we pass -mthumb to the compiler.
+
+AUTHORS
+  Jan Janak <jan@janakj.org>
+"
+}
+
+bail () {
+    echo "ERROR: $@" >&2
+    exit 1
+}
+
+# Try to detect various Android SDK and NDK directories, as well as what
+# version of tools to use.
+detect_android_toolchain () {
+    # Detect Android SDK and NDK and make sure all directories and tools are
+    # there.
+    android_sdk=$(which android | sed -Ee 's@(.*)/tools/android@\1@')
+    [ -z "$android_sdk" ] && bail "Android SDK not found"
+
+    # If you install NDK from the android manager tool, it will be located in
+    # the ndk subdirectory of Android SDK.
+    android_ndk="$android_sdk/ndk"
+    [ -d "$android_ndk" ] || bail "Android NDK not found"
+
+    # If the caller didn't provide an Android platform version, detect the
+    # highest platform version available in Android NDK.
+    PLATFORM=${PLATFORM:-android-$(ls $android_ndk/platforms/ \
+	| sed -Ee 's/^android-//' | sort -n | tail -1)}
+
+    # Only one Android architecture is supported at the moment.
+    ARCH=${ARCH:-arm-linux-androideabi}
+
+    sysroot="$android_ndk/platforms/$PLATFORM/arch-$(echo $ARCH \
+            | cut -d - -f 1)/"
+    [ -d "$sysroot" ] || bail "Platform headers $sysroot not found"
+
+    # If the caller didn't provide a toolchain version, detect the most recent
+    # version of gcc and friends available in the NDK.
+    TOOL_VERSION=${TOOL_VERSION:-$(ls $android_ndk/toolchains/ | grep $ARCH \
+	| sed -Ee "s/^$ARCH-//" | sort | tail -1)}
+
+    # Detect the host platform
+    case "$(uname -s)" in
+        Darwin) HOST=darwin-x86 ;;
+	Linux)  HOST=linux-x86  ;;
+	*)      HOST=windows    ;;
+    esac
+
+    toolchain="$android_ndk/toolchains/${ARCH}-$TOOL_VERSION/prebuilt/$HOST/bin"
+    [ -d "$toolchain" ] || {
+	bail "Tools ver. $TOOLS_VERSION for $ARCH on $HOST not found"
+    }
+}
+
+# Find all shared libraries created during compilation. Return a list of the
+# libraries in libs environment variable.
+find_libs () {
+    # Find all shared libraries
+    libs=$(cd $1; find "usr/lib" -type f -name "*.so.*" -print)
+    [ -z "$libs" ] && bail "Can't find any shared libraries"
+}
+
+# HACK: Modify the SONAME in all shared libraries so that it does not includes
+# the version of the ABI. Unfortunately, this is necessary because Android
+# linker doesn't support versioned libraries. Also, the suffix of the library
+# must be .so, otherwise Apkbuilder would not copy the library into the
+# package. Let's hope that a future release of Android NDK will deal better
+# with standard Linux libraries and such hacks won't be necessary.
+fix_soname () {
+    unset src extra
+    for l in $@ ; do
+	old=$($ARCH-objdump $dst/$l -p | grep SONAME \
+	    | sed -Ee 's/^[ \t]*SONAME[ \t]+(.*)$/\1/')
+	[ -z "$old" ] && bail "Can't find SONAME for $dst/$l"
+
+	new=$(echo $old | sed -Ee 's/(^.+\.so)(\.[0-9]+)+/\1/')
+	padding=$(echo $old | sed -Ee 's/^.+\.so(\.[0-9]+)+$/\1/' \
+	    | sed -Ee 's/./\\000/g')
+
+	echo "$old -> $new$padding"
+	cp $dst/$l $dst/$new
+	perl -pi -e "s/$old/$new$padding/" "$dst/$new"
+	src+=" $new"
+    done
+}
+
+[ $# -gt 0 ] && {
+    print_doc
+    exit 0
+}
+
+# Create a file Android.mk for the shared library. Gets the target directory
+# from the variable $dst and the list of libraries from the $src
+# variable. Extra headers can be passed in variable $extra.
+write_android_mk () {
+    # Export header files if we have them
+    [ -d "$dst/usr/include" ] && {
+	extra+="LOCAL_EXPORT_C_INCLUDES := \$(LOCAL_PATH)/usr/include"
+    }
+
+    cat >$dst/Android.mk <<EOF
+LOCAL_PATH := \$(call my-dir)
+
+include \$(CLEAR_VARS)
+LOCAL_MODULE := $NAME
+LOCAL_SRC_FILES := $src
+$extra
+include \$(PREBUILT_SHARED_LIBRARY)
+EOF
+}
+
+apply_patches () {
+    [ -d "patches" ] && {
+	cp -a patches $tmp
+	(cd $tmp; quilt push -a)
+    }
+}
+
+# Make sure we have all the tools this script needs.
+for t in wget quilt perl make autoreconf mktemp android sed sort tail ls find \
+    mkdir cp ; do
+    [ -x "$(which $t)" ] || bail "Couldn't execute $t command."
+done
+
+detect_android_toolchain
+
+# The default tarball naming pattern to use if the caller didn't provide a
+# different source tarball name.
+TARBALL=${TARBALL:-$NAME-$VERSION.tar.gz}
+
+# Download the source tarball if we don't have it yet.
+[ -r "$TARBALL" ] || {
+    [ -z "$URL" ] && {
+        bail "No tarball found and no download URL provided"
+    }
+    wget "$URL"
+    [ $? -ne 0 ] && bail "Can't download source tarball from $URL"
+}
+
+# Create a temporary directory
+tmp="$(mktemp -d /tmp/build-$NAME-$VERSION-XXXXXX)"
+trap 'rm -rf "$tmp"' EXIT
+
+# And extract the sources there
+tar -C $tmp -xvf $TARBALL
+
+apply_patches
+
+$android_ndk/build/tools/make-standalone-toolchain.sh \
+    --platform=$PLATFORM \
+    --install-dir=$tmp/toolchain
+
+export PATH="$tmp/toolchain/bin:$PATH"
+export CC=$ARCH-gcc
+
+# Build
+(set -e
+ cd $tmp/${NAME}-${VERSION}
+# CPP=${ARCH}-cpp
+# CPPFLAGS=--sysroot=$sysroot
+# CFLAGS="--sysroot=$sysroot"
+# export CPP CPPFLAGS CFLAGS
+ autoreconf
+ ./configure --host=$ARCH --prefix=/usr
+ make all
+ DESTDIR=$tmp make install
+)
+[ $? -ne 0 ] && bail "Error while building the library."
+
+# Copy the results over from the temporary directory into the build directory.
+dst="$NAME-$VERSION"
+[ -d "$dst" ] && rm -rf "$dst"
+mkdir -p "$dst"
+cp -a "$tmp/usr" "$dst"
+
+find_libs $dst
+fix_soname $libs
+write_android_mk
