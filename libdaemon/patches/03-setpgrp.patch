@@ -1,0 +1,20 @@
+Parameters of setpgrp cannot be detected when crosscompiling.
+
+To detect whether setpgrp accepts parameters, the configure script needs to
+compile a simple application and run the function. That's not possible when
+the library is being cross-compiled, for example, with Android NDK. Hence,
+we need to comment out this test to be able to cross-compile the library for
+Android.
+Index: libdaemon/libdaemon-0.14/configure.ac
+===================================================================
+--- libdaemon.orig/libdaemon-0.14/configure.ac
++++ libdaemon/libdaemon-0.14/configure.ac
+@@ -71,7 +71,7 @@ AC_FUNC_SELECT_ARGTYPES
+ AC_FUNC_VPRINTF
+ AC_CHECK_FUNCS([select strerror dup2 memset strrchr asprintf])
+ AC_TYPE_MODE_T
+-AC_FUNC_SETPGRP
++#AC_FUNC_SETPGRP
+ AC_TYPE_SIGNAL
+ AC_TYPE_SIZE_T
+ 

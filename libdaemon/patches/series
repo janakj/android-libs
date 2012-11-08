@@ -1,0 +1,4 @@
+01-config_guess.patch
+02-config_sub.patch
+03-setpgrp.patch
+04-unistd.patch
