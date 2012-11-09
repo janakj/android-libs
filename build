@@ -50,23 +50,14 @@ RETURN VALUE
   the library.
 
 ENVIRONMENT VARIABLES
-  The script to build a library needs to define the following variables:
+  You can customize the build by setting the following environment variables:
 
   NAME          The name of the library being built
   VERSION       Library version
-  TARBALL       Source tarball name (default is $NAME-$VERSION.tar.gz)
+  TARBALL       Source tarball name [$NAME-$VERSION.tar.gz]
   URL           The URL to download the source tarball from (optional)
-  TOOL_VERSION  The version of gcc and related tools (default is highest)
-  ARCH          Target Android architecture (default arm-linux-androideabi)
-  PLATFORM      Target Android platform (default is the highest API number)
-
-TODO
-  Currently the script assumes that it will be run with the directory of the
-  library under android-libs set as current. Fix that.
-
-  Fix relative paths to files in quilt patches.
-
-  Make sure we pass -mthumb to the compiler.
+  TOOLCHAIN     Target Android architecture [arm-linux-androideabi-4.6]
+  PLATFORM      Target Android platform [android-3]
 
 AUTHORS
   Jan Janak <jan@janakj.org>
@@ -78,9 +69,16 @@ bail () {
     exit 1
 }
 
-# Try to detect various Android SDK and NDK directories, as well as what
-# version of tools to use.
-detect_android_toolchain () {
+# Make a standalone version of cross-compiler tools from Android NDK and
+# install them into the directory specified in $1. Add the correct
+# subdirectory with executable tools to PATH. Override the environment
+# variable CC with the correct compiler for cross-compilation. Set the
+# variable $prefix to a string suitable for the --host command line option of
+# configure.
+make_tools () {
+    # Provide a default toolchain name if the caller didn't specify any
+    TOOLCHAIN=${TOOLCHAIN:-arm-linux-androideabi-4.6}
+
     # Detect Android SDK and NDK and make sure all directories and tools are
     # there.
     android_sdk=$(which android | sed -Ee 's@(.*)/tools/android@\1@')
@@ -91,54 +89,46 @@ detect_android_toolchain () {
     android_ndk="$android_sdk/ndk"
     [ -d "$android_ndk" ] || bail "Android NDK not found"
 
-    # If the caller didn't provide an Android platform version, detect the
-    # highest platform version available in Android NDK.
-    PLATFORM=${PLATFORM:-android-$(ls $android_ndk/platforms/ \
-	| sed -Ee 's/^android-//' | sort -n | tail -1)}
+    # Extract CPU type from the toolchain name.
+    arch=$(echo "$TOOLCHAIN" | cut -d - -f 1)
+    prefix=$(echo "$TOOLCHAIN" | sed -Ee 's/^(.*)-[^-]+$/\1/')
 
-    # Only one Android architecture is supported at the moment.
-    ARCH=${ARCH:-arm-linux-androideabi}
+    opts="--arch=$arch"
+    [ -n "$TOOLCHAIN" ] && opts+=" --toolchain=$TOOLCHAIN"
+    [ -n "$PLATFORM" ] && opts+=" --platform=$PLATFORM"
 
-    sysroot="$android_ndk/platforms/$PLATFORM/arch-$(echo $ARCH \
-            | cut -d - -f 1)/"
-    [ -d "$sysroot" ] || bail "Platform headers $sysroot not found"
+    script="$android_ndk/build/tools/make-standalone-toolchain.sh"
+    $script $opts --install-dir="$1"
+    [ $? -ne 0 ] && bail "Script failed: $script $opts --install-dir=\"$1\""
 
-    # If the caller didn't provide a toolchain version, detect the most recent
-    # version of gcc and friends available in the NDK.
-    TOOL_VERSION=${TOOL_VERSION:-$(ls $android_ndk/toolchains/ | grep $ARCH \
-	| sed -Ee "s/^$ARCH-//" | sort | tail -1)}
-
-    # Detect the host platform
-    case "$(uname -s)" in
-        Darwin) HOST=darwin-x86 ;;
-	Linux)  HOST=linux-x86  ;;
-	*)      HOST=windows    ;;
-    esac
-
-    toolchain="$android_ndk/toolchains/${ARCH}-$TOOL_VERSION/prebuilt/$HOST/bin"
-    [ -d "$toolchain" ] || {
-	bail "Tools ver. $TOOLS_VERSION for $ARCH on $HOST not found"
-    }
+    export PATH="$1/bin:$PATH"
+    export CC=$prefix-gcc
 }
 
-# Find all shared libraries created during compilation. Return a list of the
-# libraries in libs environment variable.
+# Find all shared libraries installed into $1. Return the list of libraries
+# found in $libs. Report error if no shared libraries were found.
 find_libs () {
     # Find all shared libraries
     libs=$(cd $1; find "usr/lib" -type f -name "*.so.*" -print)
     [ -z "$libs" ] && bail "Can't find any shared libraries"
 }
 
-# HACK: Modify the SONAME in all shared libraries so that it does not includes
-# the version of the ABI. Unfortunately, this is necessary because Android
-# linker doesn't support versioned libraries. Also, the suffix of the library
-# must be .so, otherwise Apkbuilder would not copy the library into the
-# package. Let's hope that a future release of Android NDK will deal better
-# with standard Linux libraries and such hacks won't be necessary.
+# HACK: Remove the version suffix from the SONAME string in given
+# libraries. Argument $1 is the target directory. The remaining arguments are
+# library filenames to work with. Fixed library files will be installed
+# directly into $1. Return the list of new library filenames in $libs.
+#
+# This hack is necessary because the APK builder tool only installs shared
+# libraries whose filenames end with .so. The Android linker would not be able
+# to link the library if the SONAME string in the library's filename doesn't
+# match the SONAME string. An alternative would be to install the versioned
+# library into the APK package manually.
 fix_soname () {
-    unset src extra
+    dir="$1"
+    shift
+    unset libs
     for l in $@ ; do
-	old=$($ARCH-objdump $dst/$l -p | grep SONAME \
+	old=$($prefix-objdump $dir/$l -p | grep SONAME \
 	    | sed -Ee 's/^[ \t]*SONAME[ \t]+(.*)$/\1/')
 	[ -z "$old" ] && bail "Can't find SONAME for $dst/$l"
 
@@ -147,10 +137,75 @@ fix_soname () {
 	    | sed -Ee 's/./\\000/g')
 
 	echo "$old -> $new$padding"
-	cp $dst/$l $dst/$new
-	perl -pi -e "s/$old/$new$padding/" "$dst/$new"
-	src+=" $new"
+	cp $dir/$l $dir/$new
+	perl -pi -e "s/$old/$new$padding/" "$dir/$new"
+	libs+=" $new"
     done
+}
+
+# Create the file Android.mk for the Android NDK build system. The file should
+# be created in the directory passed to the function in $1. The name of the
+# module will be obtained from $NAME. Library filenames are taken from
+# arguments $2...
+create_android_mk () {
+    dir="$1"
+    shift
+    # Export header files if we have them
+    [ -d "$dir/usr/include" ] && {
+	extra="LOCAL_EXPORT_C_INCLUDES := \$(LOCAL_PATH)/usr/include"
+    }
+
+    cat >"$dir/Android.mk" <<EOF
+LOCAL_PATH := \$(call my-dir)
+
+include \$(CLEAR_VARS)
+LOCAL_MODULE := $NAME
+LOCAL_SRC_FILES := $@
+$extra
+include \$(PREBUILT_SHARED_LIBRARY)
+EOF
+}
+
+# If we have patches, copy them over to $1 and apply all of them using
+# quilt. The function needs to be run from the directory containing the
+# "patches" subdirectory.
+apply_patches () {
+    [ -d "patches" ] || return 0
+    cp -a patches "$1"
+    (cd "$1"; quilt push -a)
+    [ $? -ne 0 ] && bail "Error while applying patches."
+}
+
+# Run the autoreconf script.
+declare -f run_autoreconf >/dev/null || run_autoreconf () {
+    [ -x "$(which libtoolize)" ] || {
+        # A hack for Mac OS X. Libtool installed from Mac ports installs
+        # libtoolize as glibtoolize.
+	[ -x "$(which glibtoolize)" ] || bail "Cannot find libtoolize."
+	glibtoolize
+    }
+    # Otherwise the script runs libtoolize internally.
+    autoreconf
+}
+
+# Run the configure script. Cross-compile for the target architecture in $1
+# and configure libraries and header file to be installed under /usr. Gets the
+# absolute name of the destination directory to install into in $2.
+declare -f run_configure >/dev/null || run_configure () {
+    run_autoreconf
+    ./configure --host=$1 --prefix=/usr
+}
+
+# Build all the libraries. Gets the absolute name of the destination directory
+# to install into in $1.
+declare -f run_build >/dev/null || run_build () {
+    make all
+}
+
+# Install library files and header files. NOTE: The build system MUST install
+# all the files under $1!
+declare -f run_install >/dev/null || run_install () {
+    DESTDIR="$1" make install
 }
 
 [ $# -gt 0 ] && {
@@ -158,44 +213,18 @@ fix_soname () {
     exit 0
 }
 
-# Create a file Android.mk for the shared library. Gets the target directory
-# from the variable $dst and the list of libraries from the $src
-# variable. Extra headers can be passed in variable $extra.
-write_android_mk () {
-    # Export header files if we have them
-    [ -d "$dst/usr/include" ] && {
-	extra+="LOCAL_EXPORT_C_INCLUDES := \$(LOCAL_PATH)/usr/include"
-    }
-
-    cat >$dst/Android.mk <<EOF
-LOCAL_PATH := \$(call my-dir)
-
-include \$(CLEAR_VARS)
-LOCAL_MODULE := $NAME
-LOCAL_SRC_FILES := $src
-$extra
-include \$(PREBUILT_SHARED_LIBRARY)
-EOF
-}
-
-apply_patches () {
-    [ -d "patches" ] && {
-	cp -a patches $tmp
-	(cd $tmp; quilt push -a)
-    }
-}
-
 # Make sure we have all the tools this script needs.
-for t in wget quilt perl make autoreconf mktemp android sed sort tail ls find \
-    mkdir cp ; do
+for t in wget quilt perl make autoreconf mktemp android sed sort tail ls \
+    find mkdir cp ; do
     [ -x "$(which $t)" ] || bail "Couldn't execute $t command."
 done
-
-detect_android_toolchain
 
 # The default tarball naming pattern to use if the caller didn't provide a
 # different source tarball name.
 TARBALL=${TARBALL:-$NAME-$VERSION.tar.gz}
+
+cd $(dirname $0)
+root=$(pwd)
 
 # Download the source tarball if we don't have it yet.
 [ -r "$TARBALL" ] || {
@@ -210,38 +239,25 @@ TARBALL=${TARBALL:-$NAME-$VERSION.tar.gz}
 tmp="$(mktemp -d /tmp/build-$NAME-$VERSION-XXXXXX)"
 trap 'rm -rf "$tmp"' EXIT
 
-# And extract the sources there
-tar -C $tmp -xvf $TARBALL
+make_tools "$tmp/tools"
+tar -C "$tmp" -xvf "$TARBALL"
+apply_patches $tmp
 
-apply_patches
+# Prepare the destination directory for install. We name the environment
+# variable DESTDIR because that's the name picked up by Makefile generated by
+# automake and autoconf.
+export DESTDIR="$root/$NAME-$VERSION"
+[ -d "$DESTDIR" ] && rm -rf "$DESTDIR"
+mkdir -p "$DESTDIR"
 
-$android_ndk/build/tools/make-standalone-toolchain.sh \
-    --platform=$PLATFORM \
-    --install-dir=$tmp/toolchain
-
-export PATH="$tmp/toolchain/bin:$PATH"
-export CC=$ARCH-gcc
-
-# Build
 (set -e
- cd $tmp/${NAME}-${VERSION}
-# CPP=${ARCH}-cpp
-# CPPFLAGS=--sysroot=$sysroot
-# CFLAGS="--sysroot=$sysroot"
-# export CPP CPPFLAGS CFLAGS
- autoreconf
- ./configure --host=$ARCH --prefix=/usr
- make all
- DESTDIR=$tmp make install
+ cd $tmp/${NAME}-${VERSION};
+ run_configure $prefix $DESTDIR
+ run_build $DESTDIR
+ run_install $DESTDIR
 )
 [ $? -ne 0 ] && bail "Error while building the library."
 
-# Copy the results over from the temporary directory into the build directory.
-dst="$NAME-$VERSION"
-[ -d "$dst" ] && rm -rf "$dst"
-mkdir -p "$dst"
-cp -a "$tmp/usr" "$dst"
-
-find_libs $dst
-fix_soname $libs
-write_android_mk
+find_libs $DESTDIR
+fix_soname $DESTDIR $libs
+create_android_mk $DESTDIR $libs
