@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+root=".."
+
 NAME=libxml2
 VERSION=2.9.0
 URL="ftp://xmlsoft.org/libxml2/$NAME-$VERSION.tar.gz"
@@ -9,4 +11,4 @@ run_configure () {
     ./configure --host=$1 --prefix=/usr --without-python
 }
 
-source $(dirname $0)/../build
+source "$(dirname $0)/$root/build"

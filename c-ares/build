@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 
+root=".."
+
 NAME=c-ares
 VERSION=1.9.1
 URL="http://c-ares.haxx.se/download/$NAME-$VERSION.tar.gz"
 
-source $(dirname $0)/../build
+source "$(dirname $0)/$root/build"

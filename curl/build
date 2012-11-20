@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 
+root=".."
+
 NAME=curl
 VERSION=7.28.0
 URL="http://curl.haxx.se/download/$NAME-$VERSION.tar.gz"
 
-source $(dirname $0)/../build
+source "$(dirname $0)/$root/build"

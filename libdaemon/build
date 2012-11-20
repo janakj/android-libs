@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 
+root=".."
+
 NAME=libdaemon
 VERSION=0.14
 URL="http://0pointer.de/lennart/projects/libdaemon/$NAME-$VERSION.tar.gz"
 
-source $(dirname $0)/../build
+source "$(dirname $0)/$root/build"
