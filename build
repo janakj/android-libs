@@ -114,9 +114,14 @@ find_libs () {
 }
 
 # HACK: Remove the version suffix from the SONAME string in given
-# libraries. Argument $1 is the target directory. The remaining arguments are
-# library filenames to work with. Fixed library files will be installed
-# directly into $1. Return the list of new library filenames in $libs.
+# libraries. Argument $1 is the target directory, the remaining arguments are
+# relative pathnames (wrt the target directory) of libraries to work with. The
+# function removes the file ending with .so if it exists (it's usually a
+# symbolic link) and stores the modified version of the library (with the
+# version suffix removed from the SONAME) under that name.
+#
+# The function returns a list of modified library names with paths relative to
+# the target directory. The list is suitable for inclusion into Android.mk.
 #
 # This hack is necessary because the APK builder tool only installs shared
 # libraries whose filenames end with .so. The Android linker would not be able
@@ -126,21 +131,24 @@ find_libs () {
 fix_soname () {
     dir="$1"
     shift
+    src_files=$(cd $dir
     unset libs
     for l in $@ ; do
-	old=$($prefix-objdump $dir/$l -p | grep SONAME \
-	    | sed -Ee 's/^[ \t]*SONAME[ \t]+(.*)$/\1/')
-	[ -z "$old" ] && bail "Can't find SONAME for $dst/$l"
+	dir="$(dirname $l)"
+	old=$($prefix-objdump $l -p | grep SONAME | sed -Ee \
+	    's/^[ \t]*SONAME[ \t]+(.*)$/\1/')
+	[ -z "$old" ] && bail "Can't find SONAME for $dir/$l"
 
 	new=$(echo $old | sed -Ee 's/(^.+\.so)(\.[0-9]+)+/\1/')
-	padding=$(echo $old | sed -Ee 's/^.+\.so(\.[0-9]+)+$/\1/' \
-	    | sed -Ee 's/./\\000/g')
+	padding=$(echo $old | sed -Ee 's/^.+\.so(\.[0-9]+)+$/\1/' | sed -Ee \
+	    's/./\\000/g')
 
-	echo "$old -> $new$padding"
-	cp $dir/$l $dir/$new
-	perl -pi -e "s/$old/$new$padding/" "$dir/$new"
-	libs+=" $new"
+	rm -f "$dir/$new" >/dev/null 2>&1
+	cp "$l" "$dir/$new" >/dev/null 2>&1
+	perl -pi -e "s/$old/$new$padding/" "$dir/$new" >/dev/null 2>&1
+	libs+=" $dir/$new"
     done
+    echo $libs)
 }
 
 # Create the file Android.mk for the Android NDK build system. The file should
@@ -155,12 +163,16 @@ create_android_mk () {
 	extra="LOCAL_EXPORT_C_INCLUDES := \$(LOCAL_PATH)/usr/include"
     }
 
+    # Prepare the list of src files, relative to $LOCAL_PATH
+    unset files
+    for l in $@ ; do files+="\$(LOCAL_PATH)/$l "; done
+
     cat >"$dir/Android.mk" <<EOF
 LOCAL_PATH := \$(call my-dir)
 
 include \$(CLEAR_VARS)
 LOCAL_MODULE := $NAME
-LOCAL_SRC_FILES := $@
+LOCAL_SRC_FILES := $files
 $extra
 include \$(PREBUILT_SHARED_LIBRARY)
 EOF
@@ -225,6 +237,7 @@ TARBALL=${TARBALL:-$NAME-$VERSION.tar.gz}
 
 cd $(dirname $0)
 root=$(pwd)
+sysroot=$root/../sysroot
 
 # Download the source tarball if we don't have it yet.
 [ -r "$TARBALL" ] || {
@@ -255,9 +268,11 @@ mkdir -p "$DESTDIR"
  run_configure $prefix $DESTDIR
  run_build $DESTDIR
  run_install $DESTDIR
+ run_install $sysroot
 )
 [ $? -ne 0 ] && bail "Error while building the library."
 
 find_libs $DESTDIR
 fix_soname $DESTDIR $libs
-create_android_mk $DESTDIR $libs
+fix_soname $sysroot $libs
+create_android_mk $DESTDIR $src_files
