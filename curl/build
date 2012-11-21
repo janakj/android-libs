@@ -6,4 +6,9 @@ NAME=curl
 VERSION=7.28.0
 URL="http://curl.haxx.se/download/$NAME-$VERSION.tar.gz"
 
+run_configure () {
+    run_autoreconf
+    LIBS=-lcares ./configure --host=$1 --prefix=/usr --enable-ares
+}
+
 source "$(dirname $0)/$root/build"
