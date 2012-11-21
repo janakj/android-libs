@@ -113,8 +113,7 @@ make_tools () {
 # found in $libs. Report error if no shared libraries were found.
 find_libs () {
     # Find all shared libraries
-    libs=$(cd $1; find "usr/lib" -type f -name "*.so.*" -print)
-    [ -z "$libs" ] && bail "Can't find any shared libraries"
+    libs=$(cd $1; find "usr/lib" -type f -name "*.so.*" -print || true)
 }
 
 # HACK: Remove the version suffix from the SONAME string in given
@@ -282,6 +281,9 @@ export PKG_CONFIG_LIBDIR=$PKG_CONFIG_SYSROOT_DIR/usr/lib/pkgconfig/
 [ $? -ne 0 ] && bail "Error while building the library."
 
 find_libs $DESTDIR
-fix_soname $DESTDIR $libs
-fix_soname "$sysroot" $libs
-create_android_mk $DESTDIR $src_files
+[ -n "$libs" ] && {
+    fix_soname $DESTDIR $libs
+    fix_soname "$sysroot" $libs
+    create_android_mk $DESTDIR $src_files
+}
+exit 0
