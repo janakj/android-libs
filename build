@@ -166,16 +166,12 @@ create_android_mk () {
 	extra="LOCAL_EXPORT_C_INCLUDES := \$(LOCAL_PATH)/usr/include"
     }
 
-    # Prepare the list of src files, relative to $LOCAL_PATH
-    unset files
-    for l in $@ ; do files+="\$(LOCAL_PATH)/$l "; done
-
     cat >"$dir/Android.mk" <<EOF
 LOCAL_PATH := \$(call my-dir)
 
 include \$(CLEAR_VARS)
 LOCAL_MODULE := $NAME
-LOCAL_SRC_FILES := $files
+LOCAL_SRC_FILES := $@
 $extra
 include \$(PREBUILT_SHARED_LIBRARY)
 EOF
