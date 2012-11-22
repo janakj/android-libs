@@ -180,11 +180,12 @@ EOF
 }
 
 # Add a new prebuild shared library section to the Android.mk file in $1. The
-# name of the section is in $2. The rest of the arguments are source files
-# (.so files).
+# rest of the arguments are library files (.so) to be added as source
+# files. The name of the module will be derived from the first library name on
+# the list.
 add_prebuild_shared () {
     dir="$1"; shift
-    module="$1"; shift
+    module=$(echo $(basename $1) | sed -Ee 's/^(.*)\.so$/\1/')
 
     # Export header files if we have them
     [ -d "$dir/usr/include" ] && {
@@ -202,11 +203,13 @@ EOF
 }
 
 # Add a new prebuild static library section to the Android.mk file in $1. The
-# name of the section is in $2. The rest of the arguments are source files (.a
-# files).
+# rest of the argument list are library files (.a) to be added as source
+# files. The name of the module will be derived from the first library name on
+# the list.
 add_prebuild_static () {
     dir="$1"; shift
-    module="$1"; shift
+
+    module=$(echo $(basename $1) | sed -Ee  's/^(.*)\.a$/\1/')
 
     # Export header files if we have them
     [ -d "$dir/usr/include" ] && {
@@ -339,7 +342,7 @@ find_a_libs  "$DESTDIR"
 
 # Create Android.mk
 open_android_mk "$DESTDIR"
-[ -n "$so_libs" ] && add_prebuild_shared "$DESTDIR" "$NAME" $so_libs
-[ -n "$a_libs"  ] && add_prebuild_static "$DESTDIR" "${NAME}-static" $a_libs
+for l in $so_libs ; do add_prebuild_shared "$DESTDIR" $l; done
+for l in $a_libs  ; do add_prebuild_static "$DESTDIR" $l; done
 
 exit 0
