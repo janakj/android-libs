@@ -1,0 +1,14 @@
+# -*- mode: org -*-
+
+* TODO Implement better for native libs
+The Android library loader cannot resolve transitive library dependencies. It
+should be possible to figure those out automatically by reading the ELF
+headers in those libraries and load all the dependencies automatically.
+
+* TODO Fix OpenSSL installation
+Since the destination directory to install into is set at Configure time, the
+two runs of make install that the build system runs will be installing all the
+files into the same directory. Therefore there will be no libraries installed
+under openssl/version/usr/lib...
+
+* TODO Export C flags from libraries
