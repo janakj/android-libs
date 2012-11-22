@@ -30,29 +30,20 @@ DESCRIPTION
   The script also installs libraries and header files into a common directory
   under toolchain/sysroot. This is useful when one library depends on another.
 
-  To use the pre-build library, include the generated Android.mk in your
-  project's jni/Android.mk. For example (for libcurl):
+  To use pre-built libraries in your Android project, set the environment
+  variable NDK_MODULE_PATH to point to the top-level directory of android-libs
+  and then you can import individual packages with import-module, for example:
 
-  ...
-  LOCAL_SHARED_LIBRARIES := curl
-  include \$(BUILD_SHARED_LIBRARY)
-  include \".../android-libs/curl/7.28.0/Android.mk\"
-  ...
+    $(call import-module, curl/7.28.0)
 
-  Alternatively, you can configure the NDK_MODULE_PATH environment variable to
-  point to the directory android-libs and then you can import individual
-  packages import-module. For example:
+  Note: Each module may also import other modules internally and in that case
+  multiple .so libraries will be installed in your Android project. Since the
+  Android linker won't be able to find shared libraries that other libraries
+  depend upon, you may need to load them manually before loading the
+  corresponding library, for example:
 
-  $(call import-module, curl/7.28.0)
-
-  Note: If the JNI library in your Android project depends on a pre-build
-  shared library (like libcurl), you may need to load the pre-build shared
-  library explicitly with something like:
-
-  System.loadLibrary(\"curl\");
-
-  It appears that the Android linker cannot handle native library dependencies
-  correctly (at least on Android 4.2).
+    System.loadLibrary(\"cares\");
+    System.loadLibrary(\"curl\");
 
 RETURN VALUE
   The script returns 0 on success and a non-zero value if it failed to build
@@ -61,12 +52,14 @@ RETURN VALUE
 ENVIRONMENT VARIABLES
   You can customize the build by setting the following environment variables:
 
-  NAME          The name of the library being built
-  VERSION       Library version
-  TARBALL       Source tarball name [$NAME-$VERSION.tar.gz]
-  URL           The URL to download the source tarball from (optional)
-  TOOLCHAIN     Target Android architecture [arm-linux-androideabi-4.6]
-  PLATFORM      Target Android platform [android-3]
+  NAME       The name of the library being built
+  VERSION    Library version
+  TARBALL    Source tarball name [$NAME-$VERSION.tar.gz]
+  URL        The URL to download the source tarball from (optional)
+  TOOLCHAIN  Target Android architecture [arm-linux-androideabi-4.6]
+  PLATFORM   Target Android platform [android-3]
+  DEPENDS    A list of modules a library depends on. Each dependency is a
+             triplet name/version/module.
 
 AUTHORS
   Jan Janak <jan@janakj.org>
@@ -185,21 +178,30 @@ EOF
 # the list.
 add_prebuild_shared () {
     dir="$1"; shift
+    mk="$dir/Android.mk"
     module=$(echo $(basename $1) | sed -Ee 's/^(.*)\.so$/\1/')
 
-    # Export header files if we have them
-    [ -d "$dir/usr/include" ] && {
-	extra="LOCAL_EXPORT_C_INCLUDES := \$(LOCAL_PATH)/usr/include"
-    }
-
-    cat >>"$dir/Android.mk" <<EOF
+    cat >>"$mk" <<EOF
 include \$(CLEAR_VARS)
 LOCAL_MODULE := $module
 LOCAL_SRC_FILES := $@
-$extra
-include \$(PREBUILT_SHARED_LIBRARY)
-
 EOF
+
+    # Export header files if we have them
+    [ -d "$dir/usr/include" ] && {
+	echo "LOCAL_EXPORT_C_INCLUDES := \$(LOCAL_PATH)/usr/include" >>"$mk"
+    }
+
+    [ -n "$DEPENDS" ] && {
+	echo -n "LOCAL_SHARED_LIBRARIES :=" >>"$mk"
+	for d in $DEPENDS ; do
+	    echo -n " $(echo $d | cut -d / -f 3)" >>"$mk"
+	done
+	echo "" >>"$mk"
+    }
+
+    echo "include \$(PREBUILT_SHARED_LIBRARY)" >>"$mk"
+    echo "" >>"$mk"
 }
 
 # Add a new prebuild static library section to the Android.mk file in $1. The
@@ -208,22 +210,38 @@ EOF
 # the list.
 add_prebuild_static () {
     dir="$1"; shift
-
+    mk="$dir/Android.mk"
     module=$(echo $(basename $1) | sed -Ee  's/^(.*)\.a$/\1/')
+
+    cat >>"$mk" <<EOF
+include \$(CLEAR_VARS)
+LOCAL_MODULE := ${module}_static
+LOCAL_SRC_FILES := $@
+EOF
 
     # Export header files if we have them
     [ -d "$dir/usr/include" ] && {
-	extra="LOCAL_EXPORT_C_INCLUDES := \$(LOCAL_PATH)/usr/include"
+	echo "LOCAL_EXPORT_C_INCLUDES := \$(LOCAL_PATH)/usr/include" >>"$mk"
     }
 
-    cat >>"$dir/Android.mk" <<EOF
-include \$(CLEAR_VARS)
-LOCAL_MODULE := $module
-LOCAL_SRC_FILES := $@
-$extra
-include \$(PREBUILT_STATIC_LIBRARY)
+    [ -n "$DEPENDS" ] && {
+	echo -n "LOCAL_SHARED_LIBRARIES :=" >>"$mk"
+	for d in $DEPENDS ; do
+	    echo -n " $(echo $d | cut -d / -f 3)" >>"$mk"
+	done
+	echo "" >>"$mk"
+    }
 
-EOF
+    echo "include \$(PREBUILT_STATIC_LIBRARY)" >>"$mk"
+    echo "" >>"$mk"
+}
+
+close_android_mk () {
+    dir="$1"
+    for d in $DEPENDS ; do
+	inc=$(echo $d | cut -d / -f 1-2)
+	echo "\$(call import-module, $inc)" >>"$dir/Android.mk"
+    done
 }
 
 # If we have patches, copy them over to $1 and apply all of them using
@@ -344,5 +362,6 @@ find_a_libs  "$DESTDIR"
 open_android_mk "$DESTDIR"
 for l in $so_libs ; do add_prebuild_shared "$DESTDIR" $l; done
 for l in $a_libs  ; do add_prebuild_static "$DESTDIR" $l; done
+close_android_mk "$DESTDIR"
 
 exit 0
