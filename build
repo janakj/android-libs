@@ -334,6 +334,8 @@ mkdir -p "$DESTDIR"
 export PKG_CONFIG_SYSROOT_DIR="$sysroot"
 export PKG_CONFIG_LIBDIR="$PKG_CONFIG_SYSROOT_DIR/usr/lib/pkgconfig/"
 
+export HOST="$prefix"
+
 (set -e
  cd $tmp/${NAME}-${VERSION};
  run_configure $prefix "$DESTDIR"
