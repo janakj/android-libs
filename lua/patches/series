@@ -1,0 +1,4 @@
+01-crosscompile.patch
+02-trydecpoint.patch
+03-readline.patch
+04-sharedlib.patch
