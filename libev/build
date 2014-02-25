@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+
+root=".."
+
+NAME=libev
+VERSION=4.15
+URL="http://dist.schmorp.de/libev/libev-4.15.tar.gz"
+
+run_configure () {
+    export LIBEV_M4_AVOID_LIBM=1
+    CFLAGS=-Dfd_mask=int ./configure --host=$1 --prefix=/usr 
+}
+
+source "$(dirname $0)/$root/build"
