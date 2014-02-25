@@ -4,7 +4,7 @@ set -e
 cd $(dirname $0)
 rm -rf "toolchain"
 
-for l in openssl c-ares curl libdaemon libmicrohttpd libxml2 ; do
+for l in openssl c-ares curl libdaemon libmicrohttpd libxml2 db libev lua protobuf-c; do
     [ -x "$l/build" ] || {
 	echo "ERROR: Cannot execute $l/build." >&2
 	exit 1;
