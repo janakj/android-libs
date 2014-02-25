@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+
+root=".."
+
+NAME=db
+VERSION=5.1.29
+URL="http://download.oracle.com/berkeley-db/$NAME-$VERSION.tar.gz"
+
+run_configure () {
+    ./dist/configure --host=$1 --prefix=/usr
+}
+
+source "$(dirname $0)/$root/build"
