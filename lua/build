@@ -11,7 +11,7 @@ run_configure () {
 }
 
 run_build () {
-    make linux DESTDIR="$1"
+    make posix DESTDIR="$1"
 }
 
 
