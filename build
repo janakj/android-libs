@@ -263,7 +263,7 @@ declare -f run_autoreconf >/dev/null || run_autoreconf () {
 	glibtoolize
     }
     # Otherwise the script runs libtoolize internally.
-    autoreconf
+    autoreconf -i --force
 }
 
 # Run the configure script. Cross-compile for the target architecture in $1

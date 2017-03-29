@@ -3,8 +3,8 @@
 root=".."
 
 NAME=libev
-VERSION=4.15
-URL="http://dist.schmorp.de/libev/libev-4.15.tar.gz"
+VERSION=4.24
+URL="http://dist.schmorp.de/$NAME/$NAME-$VERSION.tar.gz"
 
 run_configure () {
     export LIBEV_M4_AVOID_LIBM=1

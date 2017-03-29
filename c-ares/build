@@ -3,7 +3,7 @@
 root=".."
 
 NAME=c-ares
-VERSION=1.9.1
+VERSION=1.12.0
 URL="http://c-ares.haxx.se/download/$NAME-$VERSION.tar.gz"
 
 source "$(dirname $0)/$root/build"
